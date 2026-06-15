@@ -6,9 +6,9 @@
 
 | Output | Details |
 | :--- | :--- |
-| <img src="./experiments/HDR_preview.webm" width="400" alt="HDR Mode 6" /> | **HDR 32M Color Mode**<br>Experimental `display-p3` colorspace with high-density output. |
-| <img src="./experiments/Pixel_preview.webm" width="400" alt="Pixel Mode" /> | **PIXEL Mode**<br>Showcases rendered using Mode 5 (16m Colors) combined with the `--pixel` flag for ultra-high fidelity. |
-| <img src="./experiments/1440p_preview.webm" width="400" alt="1440p Resolution" /> | **1440p Ultra High Resolution**<br>Showcases the new `--res 1440p` preset pushing ASCILINE to the limits of text rendering density. |
+| <video src="https://raw.githubusercontent.com/YusufB5/ASCILINE/main/experiments/HDR_preview.mp4" width="400" autoplay loop muted></video> | **HDR 32M Color Mode**<br>Experimental `display-p3` colorspace with high-density output. |
+| <video src="https://raw.githubusercontent.com/YusufB5/ASCILINE/main/experiments/Pixel_preview.mp4" width="400" autoplay loop muted></video> | **PIXEL Mode**<br>Showcases rendered using Mode 5 (16m Colors) combined with the `--pixel` flag for ultra-high fidelity. |
+| <video src="https://raw.githubusercontent.com/YusufB5/ASCILINE/main/experiments/1440p_preview.mp4" width="400" autoplay loop muted></video> | **1440p Ultra High Resolution**<br>Showcases the new `--res 1440p` preset pushing ASCILINE to the limits of text rendering density. |
 
 ## 🎯 Strategic Vision & Core Capabilities
 
