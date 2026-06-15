@@ -19,7 +19,8 @@ const volumeSlider = document.getElementById('volume-slider');
 let state = 'IDLE'; // IDLE | PLAYING | PAUSED
 let ws = null;
 const frameBuffer = [];
-const BUFFER_SIZE = 2; // Reduced buffer size for lower latency
+const TARGET_PRE_RENDER_SECONDS = 5; // 5 seconds of pre-rendering
+let PRE_RENDER_BUFFER_SIZE = 150;    // calculated as targetFps * 5
 let codecDecoder = null; // Adaptive codec decoder (codec.js)
 let targetFps = 24;
 let frameInterval = 1000 / targetFps;
@@ -185,19 +186,25 @@ function connectWebSocket() {
                     codecDecoder = null;
                 }
 
-                // ── AUDIO READY GATE ──
-                // Buffer video frames but don't render until audio is ready.
-                // This prevents the 0.5s initial stutter.
+                PRE_RENDER_BUFFER_SIZE = Math.ceil(targetFps * TARGET_PRE_RENDER_SECONDS);
+
+                // ── PRE-RENDER / AUDIO READY GATE ──
+                // Buffer video frames for TARGET_PRE_RENDER_SECONDS before rendering
+                // to guarantee smooth streaming.
                 readyToRender = false;
-                state = 'PLAYING';
+                state = 'BUFFERING';
+                statusEl.textContent = `Pre-rendering... 0%`;
 
                 const beginRendering = () => {
+                    state = 'PLAYING';
                     readyToRender = true;
-                    streamStartTime = performance.now();
+                    streamStartTime = performance.now() - (frameBuffer[0]?.time * 1000 || 0); // sync start to first buffered frame
                     lastRenderTime = performance.now();
                     lastFpsUpdate = lastRenderTime;
                     requestAnimationFrame(renderFrame);
                 };
+
+                let audioReady = false;
 
                 if (audioEl) {
                     audioEl.pause();
@@ -205,22 +212,48 @@ function connectWebSocket() {
                     audioEl.src = `/audio${qs}t=${Date.now()}`;
                     audioEl.volume = volumeSlider ? volumeSlider.value : 1.0;
                     audioEl.load();
-                    audioEl.play().catch(() => {});
 
-                    // Wait for audio to actually start playing
+                    const tryStart = () => {
+                        if (audioReady && frameBuffer.length >= PRE_RENDER_BUFFER_SIZE && state === 'BUFFERING') {
+                            audioEl.play().catch(() => {});
+                            beginRendering();
+                        }
+                    };
+
                     if (audioEl.readyState >= 3) {
-                        beginRendering();
+                        audioReady = true;
+                        tryStart();
                     } else {
-                        audioEl.addEventListener('playing', beginRendering, { once: true });
-                        // Fallback: if audio fails to load (vol=0 / 204), start after 500ms
+                        audioEl.addEventListener('canplay', () => {
+                            audioReady = true;
+                            tryStart();
+                        }, { once: true });
+
+                        // Fallback: if audio fails to load (vol=0 / 204), mark as ready after 500ms
                         setTimeout(() => {
-                            if (!readyToRender) beginRendering();
+                            audioReady = true;
+                            tryStart();
                         }, 500);
                     }
                 } else {
-                    // No audio element at all → start immediately
-                    beginRendering();
+                    audioReady = true;
                 }
+
+                // Interval to check if pre-rendering is complete
+                const bufferCheckInterval = setInterval(() => {
+                    if (state !== 'BUFFERING') {
+                        clearInterval(bufferCheckInterval);
+                        return;
+                    }
+                    const percent = Math.min(100, Math.round((frameBuffer.length / PRE_RENDER_BUFFER_SIZE) * 100));
+                    statusEl.textContent = `Pre-rendering... ${percent}%`;
+
+                    if (audioReady && frameBuffer.length >= PRE_RENDER_BUFFER_SIZE) {
+                        clearInterval(bufferCheckInterval);
+                        beginRendering();
+                    }
+                }, 50);
+
                 return;
             }
             
@@ -249,10 +282,11 @@ function connectWebSocket() {
             }
         }
 
-        while (frameBuffer.length > BUFFER_SIZE * 3) frameBuffer.shift();
+        // Cap max buffer to 2x our pre-render requirement to prevent memory leaks
+        while (frameBuffer.length > PRE_RENDER_BUFFER_SIZE * 2) frameBuffer.shift();
     };
 
-    ws.onopen = () => { statusEl.textContent = 'Buffering...'; };
+    ws.onopen = () => { statusEl.textContent = 'Connecting...'; };
 
     ws.onclose = () => {
         if (state === 'PLAYING' || state === 'PAUSED') {
@@ -289,13 +323,12 @@ function renderFrame(now) {
     if (frameBuffer.length === 0) return;
 
     // A/V Sync: Drop frames that are too far behind the master clock (catch up)
-    // Made more aggressive for lower latency live playback
-    while (frameBuffer.length > 1 && frameBuffer[0].time < masterClock - 0.05) {
+    while (frameBuffer.length > 1 && frameBuffer[0].time < masterClock - 0.1) {
         frameBuffer.shift();
     }
 
     // A/V Sync: Wait if the frame is in the future
-    if (frameBuffer[0].time > masterClock + 0.02) {
+    if (frameBuffer[0].time > masterClock + 0.05) {
         return;
     }
 

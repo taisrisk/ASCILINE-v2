@@ -15,6 +15,8 @@ import subprocess
 import json
 import numpy as np
 import cv2
+import queue
+import threading
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -386,81 +388,111 @@ async def websocket_endpoint(websocket: WebSocket):
             bw_raw_bytes = 0
             debug_mode = getattr(app.state, "debug", False)
             frame_index = 0
-            prev_frame = None  # previous framebuffer snapshot for delta coding
 
-            # Pre-allocate send buffer WITH header space to avoid per-frame concat
-            if pixel_mode:
-                # Zero-Copy Pixel: 4-byte header + raw BGR (3 bytes per pixel)
-                pixel_send_buf = bytearray(4 + rows * cols * 3)
-            elif render_mode > 1:
-                # ASCII Color: 4-byte header + [char,R,G,B] per pixel
-                ascii_send_buf = bytearray(4 + rows * cols * 4)
+            # ── ASYNC PRE-ENCODING BUFFER THREAD ──
+            # We encode frames ahead of time into a thread-safe queue.
+            # This allows the Python event loop to stream asynchronously without being blocked by OpenCV.
+            # We buffer up to 150 frames.
+            frame_queue = queue.Queue(maxsize=150)
+            encode_thread_active = True
 
-            raw_frame_num = 0
-            try:
-                while True:
-                    # ── FPS DECIMATION via grab() ──
-                    # For 60→30 fps: grab (skip) 1 frame, then decode 1 frame.
-                    # grab() is ~10x faster than read() because it skips decoding.
-                    for _ in range(skip_n - 1):
-                        if not decoder.grab():
-                            break  # EOF reached during skip
+            def encode_loop():
+                nonlocal decoder
+                prev_frame = None  # previous framebuffer snapshot for delta coding
 
-                    try:
-                        gray_frame, bgr_frame = next(decoder)
-                    except StopIteration:
-                        break
+                # Pre-allocate send buffer WITH header space to avoid per-frame concat
+                if pixel_mode:
+                    # Zero-Copy Pixel: 4-byte header + raw BGR (3 bytes per pixel)
+                    pixel_send_buf = bytearray(4 + rows * cols * 3)
+                elif render_mode > 1:
+                    # ASCII Color: 4-byte header + [char,R,G,B] per pixel
+                    ascii_send_buf = bytearray(4 + rows * cols * 4)
 
-                    if pixel_mode:
-                        # ── PIXEL MODE: raw BGR (3 bytes/cell) ──
-                        raw_size = 4 + rows * cols * 3
-                        if adaptive:
-                            msg, prev_frame = encode_frame(
-                                np.ascontiguousarray(bgr_frame),
-                                prev_frame, frame_index, tolerance=tolerance)
-                            await websocket.send_bytes(msg)
-                            bw_bytes_sent += len(msg)
-                            bw_raw_bytes += raw_size
-                        else:
-                            # ── ZERO-COPY PIXEL MODE (legacy) ──
-                            struct.pack_into(">I", pixel_send_buf, 0, frame_index)
-                            pixel_send_buf[4:] = bgr_frame.tobytes()
-                            await websocket.send_bytes(bytes(pixel_send_buf))
-                            bw_bytes_sent += len(pixel_send_buf)
-                            bw_raw_bytes += len(pixel_send_buf)
-                    else:
-                        indices = np.floor_divide(gray_frame, max(1, 256 // mapper._n))
-                        np.clip(indices, 0, mapper._n - 1, out=indices)
+                enc_frame_index = 0
+                try:
+                    while encode_thread_active:
+                        # ── FPS DECIMATION via grab() ──
+                        # For 60→30 fps: grab (skip) 1 frame, then decode 1 frame.
+                        # grab() is ~10x faster than read() because it skips decoding.
+                        for _ in range(skip_n - 1):
+                            if not decoder.grab():
+                                break  # EOF reached during skip
 
-                        if render_mode == 1:
-                            char_matrix = mapper._lut[indices]
-                            lines = [''.join(row) for row in char_matrix]
-                            payload = f"{frame_index}\n" + '\n'.join(lines)
-                            await websocket.send_text(payload)
-                            payload_size = len(payload.encode('utf-8'))
-                            bw_bytes_sent += payload_size
-                            bw_raw_bytes += payload_size
-                        else:
-                            char_codes = char_byte_lut[indices]
-                            rgb = bgr_frame[:, :, ::-1]
-                            if qb > 0:
-                                rgb = (rgb >> qb) << qb
-                            frame_buf[:, :, 0] = char_codes
-                            frame_buf[:, :, 1:] = rgb
-                            raw_size = 4 + rows * cols * 4
+                        try:
+                            gray_frame, bgr_frame = next(decoder)
+                        except StopIteration:
+                            frame_queue.put((None, None, None)) # EOF marker
+                            break
+
+                        if pixel_mode:
+                            # ── PIXEL MODE: raw BGR (3 bytes/cell) ──
+                            raw_size = 4 + rows * cols * 3
                             if adaptive:
                                 msg, prev_frame = encode_frame(
-                                    frame_buf, prev_frame, frame_index,
-                                    tolerance=tolerance)
-                                await websocket.send_bytes(msg)
-                                bw_bytes_sent += len(msg)
-                                bw_raw_bytes += raw_size
+                                    np.ascontiguousarray(bgr_frame),
+                                    prev_frame, enc_frame_index, tolerance=tolerance)
+                                frame_queue.put((msg, raw_size, True)) # (data, raw_size, is_binary)
                             else:
-                                struct.pack_into(">I", ascii_send_buf, 0, frame_index)
-                                ascii_send_buf[4:] = frame_buf.tobytes()
-                                await websocket.send_bytes(bytes(ascii_send_buf))
-                                bw_bytes_sent += len(ascii_send_buf)
-                                bw_raw_bytes += len(ascii_send_buf)
+                                # ── ZERO-COPY PIXEL MODE (legacy) ──
+                                struct.pack_into(">I", pixel_send_buf, 0, enc_frame_index)
+                                pixel_send_buf[4:] = bgr_frame.tobytes()
+                                frame_queue.put((bytes(pixel_send_buf), raw_size, True))
+                        else:
+                            indices = np.floor_divide(gray_frame, max(1, 256 // mapper._n))
+                            np.clip(indices, 0, mapper._n - 1, out=indices)
+
+                            if render_mode == 1:
+                                char_matrix = mapper._lut[indices]
+                                lines = [''.join(row) for row in char_matrix]
+                                payload = f"{enc_frame_index}\n" + '\n'.join(lines)
+                                payload_size = len(payload.encode('utf-8'))
+                                frame_queue.put((payload, payload_size, False))
+                            else:
+                                char_codes = char_byte_lut[indices]
+                                rgb = bgr_frame[:, :, ::-1]
+                                if qb > 0:
+                                    rgb = (rgb >> qb) << qb
+                                frame_buf[:, :, 0] = char_codes
+                                frame_buf[:, :, 1:] = rgb
+                                raw_size = 4 + rows * cols * 4
+                                if adaptive:
+                                    msg, prev_frame = encode_frame(
+                                        frame_buf, prev_frame, enc_frame_index,
+                                        tolerance=tolerance)
+                                    frame_queue.put((msg, raw_size, True))
+                                else:
+                                    struct.pack_into(">I", ascii_send_buf, 0, enc_frame_index)
+                                    ascii_send_buf[4:] = frame_buf.tobytes()
+                                    frame_queue.put((bytes(ascii_send_buf), raw_size, True))
+
+                        enc_frame_index += 1
+                except Exception as e:
+                    print(f"Encode thread error: {e}")
+                    frame_queue.put((None, None, None))
+
+            encoder_thread = threading.Thread(target=encode_loop, daemon=True)
+            encoder_thread.start()
+
+            try:
+                while True:
+                    # Non-blocking get to yield back to event loop if queue is empty
+                    try:
+                        data, raw_size, is_binary = frame_queue.get_nowait()
+                    except queue.Empty:
+                        await asyncio.sleep(0.001)
+                        continue
+
+                    if data is None:
+                        break # EOF marker
+
+                    if is_binary:
+                        await websocket.send_bytes(data)
+                        bw_bytes_sent += len(data)
+                        bw_raw_bytes += raw_size
+                    else:
+                        await websocket.send_text(data)
+                        bw_bytes_sent += len(data.encode('utf-8'))
+                        bw_raw_bytes += raw_size
 
                     current_time = time.time()
                     if debug_mode and current_time - bw_start_time >= 1.0:
@@ -483,6 +515,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     frame_index += 1
 
             finally:
+                encode_thread_active = False
                 decoder.release()
 
             # Video finished → advance queue
