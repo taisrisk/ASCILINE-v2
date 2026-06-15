@@ -322,16 +322,26 @@ if __name__ == "__main__":
         help="Color quality: 0=max quality, 3=max speed (default: 0)")
     parser.add_argument("-c", "--cols", type=int, default=0,
         help="Fixed grid width. If 0, auto-fits to terminal (default: 0)")
+    parser.add_argument("--res", type=str, choices=["480p", "720p", "1080p"], default=None,
+        help="Resolution preset (overrides --cols)")
     args = parser.parse_args()
 
     custom_palette = args.palette.split() if args.palette else None
+
+    # Map resolution to cols
+    res_cols = None
+    if args.res:
+        res_map = {"480p": 854, "720p": 1280, "1080p": 1920}
+        res_cols = res_map.get(args.res.lower())
+
+    final_cols = res_cols if res_cols is not None else args.cols
 
     try:
         renderer = TerminalRenderer(
             path          = args.video,
             palette       = custom_palette,
             quantize_bits = args.quality,
-            cols          = args.cols,
+            cols          = final_cols,
         )
         renderer.play()
     except FileNotFoundError as e:

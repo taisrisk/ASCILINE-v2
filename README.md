@@ -162,13 +162,20 @@ The engine supports different fidelity levels via the `--mode` flag:
 python stream_server.py --mode 5 --cols 240 --rows 100
 ```
 ### 📐 Resolution & Auto-Scaling
-By default, you only need to specify the width (`--cols`). ASCILINE will automatically calculate the correct `--rows` based on the source video's aspect ratio to prevent stretching.
+You can easily control the output quality by using the `--res` flag, which provides convenient presets that automatically set the optimal width for higher quality/density output:
+- `--res 480p` (Maps to 854 columns)
+- `--res 720p` (Maps to 1280 columns)
+- `--res 1080p` (Maps to 1920 columns)
+
+Alternatively, you can manually specify the width (`--cols`). ASCILINE will automatically calculate the correct `--rows` based on the source video's aspect ratio to prevent stretching.
 
 - **ASCII Mode Recommended:** `--cols 200` to `--cols 240` (Best balance of text detail and cinematic 30 FPS performance).
 - **Pixel Mode Recommended:** `--cols 600` to `--cols 900` (Provides near-HD visual quality. Performance heavily depends on your machine's CPU/VRAM).
-- > **Smart Defaults:** If you do not specify a `--cols` value, ASCILINE automatically defaults to `450` when Pixel Mode is enabled, and `200` for standard ASCII text mode. 
-- > ⚠️ **Hardware Limits & A/V Sync:** If you push the `--cols` too high for your specific hardware (e.g., `1350` on a laptop vs a gaming desktop), the Python backend won't be able to encode and send the massive frames fast enough. When the video stream lags behind the audio, you will experience A/V desync (audio finishing early). If this happens, simply lower your `--cols` value!
+- > **Smart Defaults:** If you do not specify `--res` or `--cols`, ASCILINE automatically defaults to `450` when Pixel Mode is enabled, and `200` for standard ASCII text mode.
+- > ⚠️ **Hardware Limits & A/V Sync:** Higher resolutions (like 720p or 1080p) will output incredibly dense and highly detailed ASCII art and pixels, but they require a very fast CPU to process frames in real-time. If you push the resolution too high for your specific hardware (e.g., `--res 1080p` on a standard laptop), the Python backend won't be able to encode and send the massive frames fast enough. When the video stream lags behind the audio, you will experience A/V desync (audio finishing early). If this happens, simply select a lower resolution or lower your `--cols` value!
 ```bash
+python stream_server.py video.mp4 --mode 5 --res 720p
+# OR manually specify width
 python stream_server.py video.mp4 --mode 5 --cols 240
 # Terminal will show: [AUTO] 1920x1080 → grid 240x67
 ```
@@ -189,11 +196,11 @@ python stream_server.py video.mp4 --cols 220 --vol 3   # Loud
 ```
 
 ### Playlist Format (`playlist.json`)
-Each entry can override the global `--mode`, `--pixel`, `--vol`, and `--cols` defaults:
+Each entry can override the global `--mode`, `--pixel`, `--vol`, `--cols`, and `--res` defaults:
 ```json
 [
     { "video": "intro.mp4",  "mode": 1, "vol": 1 },
-    { "video": "main.mp4",   "mode": 5, "pixel": true, "vol": 3, "cols": 520 },
+    { "video": "main.mp4",   "mode": 5, "pixel": true, "vol": 3, "res": "720p" },
     { "video": "outro.mp4",  "mode": 3, "vol": 2, "cols": 240 }
 ]
 ```

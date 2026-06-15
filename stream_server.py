@@ -41,6 +41,15 @@ def get_video_dimensions(path: str) -> tuple[int, int]:
     return w, h
 
 
+def get_cols_from_res(res: str) -> int | None:
+    """Returns the preset width for a given resolution string."""
+    res_map = {
+        "480p": 854,
+        "720p": 1280,
+        "1080p": 1920
+    }
+    return res_map.get(res.lower() if res else None)
+
 def calc_auto_rows(cols: int, vid_w: int, vid_h: int, pixel_mode: bool) -> int:
     """
     Calculate rows from video aspect ratio.
@@ -114,6 +123,11 @@ def load_folder(folder_path: str, default_mode: int, default_vol: int) -> list[d
     # Filesystem order (no sort applied)
     return entries
 
+class MockArgs:
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
 def build_queue(args) -> list[dict]:
     """
     Builds the video queue based on argument priority:
@@ -131,24 +145,36 @@ def build_queue(args) -> list[dict]:
             item.setdefault("pixel", args.pixel)
             
             is_pixel = item.get("pixel", False)
-            default_cols = args.cols if args.cols is not None else (450 if is_pixel else 200)
+
+            item_res = item.get("res", args.res)
+            res_cols = get_cols_from_res(item_res)
+
+            if res_cols is not None:
+                default_cols = res_cols
+            else:
+                default_cols = args.cols if args.cols is not None else (450 if is_pixel else 200)
+
             item.setdefault("cols", default_cols)
             item.setdefault("rows", args.rows)
         return items
 
+    res_cols = get_cols_from_res(args.res)
+    if res_cols is not None:
+        global_default_cols = res_cols
+    else:
+        global_default_cols = args.cols if args.cols is not None else (450 if args.pixel else 200)
+
     if args.folder:
         print(f"[FOLDER] Scanning: {args.folder}")
         items = load_folder(args.folder, args.mode, args.vol)
-        default_cols = args.cols if args.cols is not None else (450 if args.pixel else 200)
         for item in items:
             item["pixel"] = args.pixel
-            item["cols"] = default_cols
+            item["cols"] = global_default_cols
             item["rows"] = args.rows
         return items
 
     # Legacy: single video argument
-    default_cols = args.cols if args.cols is not None else (450 if args.pixel else 200)
-    return [{"video": resolve_video_path(args.video), "mode": args.mode, "vol": args.vol, "pixel": args.pixel, "cols": default_cols, "rows": args.rows}]
+    return [{"video": resolve_video_path(args.video), "mode": args.mode, "vol": args.vol, "pixel": args.pixel, "cols": global_default_cols, "rows": args.rows}]
 
 
 # ── APP STATE ──────────────────────────────────────────────
@@ -501,6 +527,7 @@ HELP_TEXT = "\033[1;37m" + """
 ║  \033[32m--pixel\033[1;37m        Pixel block mode (with mode 2-5) ║
 ║  \033[32m--cols\033[1;37m  \033[35mN\033[1;37m      Grid columns  (default: 200)     ║
 ║  \033[32m--rows\033[1;37m  \033[35mN\033[1;37m      Grid rows     (default: auto)    ║
+║  \033[32m--res\033[1;37m   \033[35mR\033[1;37m      Resolution preset (480p, 720p, 1080p)║
 ║                                                   ║
 ║  \033[33m─── Playback ───\033[1;37m                                ║
 ║  \033[32m--vol\033[1;37m   \033[35m0-5\033[1;37m    Volume (0=mute, 1=normal, 5=2x)  ║
@@ -609,6 +636,7 @@ if __name__ == "__main__":
     )
     render.add_argument("--cols", type=int, default=None, help="Grid columns (default: 200 for text, 450 for pixel)")
     render.add_argument("--rows", type=int, default=0,   help="Grid rows    (default: auto from video aspect ratio)")
+    render.add_argument("--res", type=str, choices=["480p", "720p", "1080p"], default=None, help="Resolution preset (overrides --cols)")
 
     # ── Playback ──
     playback = parser.add_argument_group('\033[33mPlayback\033[0m')
@@ -651,7 +679,13 @@ if __name__ == "__main__":
     app.state.loop          = args.loop
     app.state.tolerance     = {"lossless": 0, "high": 4, "balanced": 8, "low": 16}[args.quality]
     app.state.debug         = args.debug
-    global_default_cols     = args.cols if args.cols is not None else (450 if args.pixel else 200)
+
+    res_cols = get_cols_from_res(args.res)
+    if res_cols is not None:
+        global_default_cols = res_cols
+    else:
+        global_default_cols = args.cols if args.cols is not None else (450 if args.pixel else 200)
+
     app.state.cols          = global_default_cols
     app.state.rows          = args.rows
 
