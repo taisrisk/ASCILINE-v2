@@ -6,9 +6,9 @@
 
 | Output | Details |
 | :--- | :--- |
-| <img src="https://github.com/user-attachments/assets/ccc727c9-c697-49f2-85e1-6f8c366f2019" width="400" alt="Original Source" /> | **Original Source**<br>Standard MP4 video file. |
-| <img src="https://github.com/user-attachments/assets/6bd7f5c0-81de-49fe-ba0d-9a8872ec8ae3" width="400" alt="ASCII Mode" /> | **ASCII Mode**<br>Showcases rendered using Mode 3 (32K Colors) from a 30fps source. |
-| <img src="https://github.com/user-attachments/assets/1fd88c3d-97d1-441a-a071-16de24ea82c0" width="400" alt="PIXEL Mode" /> | **PIXEL Mode**<br>Showcases rendered using Mode 5 (16m Colors) combined with the `--pixel` flag for ultra-high fidelity. |
+| <img src="./experiments/HDR_preview.webm" width="400" alt="HDR Mode 6" /> | **HDR 32M Color Mode**<br>Experimental `display-p3` colorspace with high-density output. |
+| <img src="./experiments/Pixel_preview.webm" width="400" alt="Pixel Mode" /> | **PIXEL Mode**<br>Showcases rendered using Mode 5 (16m Colors) combined with the `--pixel` flag for ultra-high fidelity. |
+| <img src="./experiments/1440p_preview.webm" width="400" alt="1440p Resolution" /> | **1440p Ultra High Resolution**<br>Showcases the new `--res 1440p` preset pushing ASCILINE to the limits of text rendering density. |
 
 ## 🎯 Strategic Vision & Core Capabilities
 
