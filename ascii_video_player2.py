@@ -36,6 +36,11 @@ class VideoDecoder:
 
     def __init__(self, path: str, cols: int, rows: int, skip_gray: bool = False) -> None:
         self._cap = cv2.VideoCapture(path)
+
+        # Optimize latency for live streams (HTTP/RTMP/RTSP) by reducing the buffer
+        if path.startswith(("http://", "https://", "rtmp://", "rtsp://", "udp://")):
+            self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
         if not self._cap.isOpened():
             raise FileNotFoundError(f"Could not open video file: {path!r}")
 
@@ -322,7 +327,7 @@ if __name__ == "__main__":
         help="Color quality: 0=max quality, 3=max speed (default: 0)")
     parser.add_argument("-c", "--cols", type=int, default=0,
         help="Fixed grid width. If 0, auto-fits to terminal (default: 0)")
-    parser.add_argument("--res", type=str, choices=["480p", "720p", "1080p"], default=None,
+    parser.add_argument("--res", type=str, choices=["480p", "720p", "1080p", "1440p"], default=None,
         help="Resolution preset (overrides --cols)")
     args = parser.parse_args()
 
@@ -331,7 +336,7 @@ if __name__ == "__main__":
     # Map resolution to cols
     res_cols = None
     if args.res:
-        res_map = {"480p": 854, "720p": 1280, "1080p": 1920}
+        res_map = {"480p": 854, "720p": 1280, "1080p": 1920, "1440p": 2560}
         res_cols = res_map.get(args.res.lower())
 
     final_cols = res_cols if res_cols is not None else args.cols

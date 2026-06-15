@@ -1,4 +1,6 @@
-# 🌌 ASCILINE Engine
+# 🌌 ASCILINE Engine (Upgraded Fork)
+
+> **Note:** This is an upgraded fork of the original ASCILINE project, adding high FPS support (60/120fps), low-latency live streaming, 1440p resolution presets, and an experimental 32M Ultra HDR rendering mode. If you love the core engine, please support the [original creator](https://github.com/YusufB5/ASCILINE).
 
 **ASCILINE** is a high-performance, cross-platform real-time ASCII video rendering engine. **Our core objective is to transform the web into a highly dynamic and interactive typographic canvas.** By mapping pixels to text-based representations, we unlock new possibilities for web media delivery.
 
@@ -18,9 +20,9 @@
 ## 🚀 Technical Features
 
 -   **Cross-Platform**: Runs seamlessly on Windows, macOS, and Linux.
--   **Real-Time ASCII Streaming**: Low-latency video-to-ASCII conversion.
--   **Real-Time Pixel Streaming**: Replaces characters with colored blocks, approaching 360p video quality.
--   **High Performance**: Uses **HTML5 Canvas** for rendering, optimized for cinematic 24-30 FPS playback. High-FPS sources are automatically decimated for stability.
+-   **Real-Time ASCII Streaming**: Ultra low-latency video-to-ASCII conversion, fully compatible with live RTMP/HTTP streams.
+-   **Real-Time Pixel Streaming**: Replaces characters with colored blocks, approaching true HD video quality with high resolutions.
+-   **High Performance**: Uses **HTML5 Canvas** for rendering. Supports high-framerate playback (60 FPS, 120 FPS) with the new `--max-fps` flag!
 -   **Master Clock Sync**: The audio track acts as the absolute master clock, guaranteeing perfect A/V synchronization.
 -   **Low-Overhead Binary Protocol*: Frames are streamed as raw binary (`Uint8Array`) directly to the canvas, saving bandwidth and CPU.
 -   **Multiple Color Modes**: Supports everything from classic B&W to 16M color ultra-fidelity.
@@ -157,15 +159,17 @@ The engine supports different fidelity levels via the `--mode` flag:
 - `3`: 32K Colors
 - `4`: 262K Colors
 - `5`: 16M Colors (Ultra)
+- `6`: 32M Colors (Experimental HDR display-p3)
 
 ```bash
-python stream_server.py --mode 5 --cols 240 --rows 100
+python stream_server.py --mode 6 --res 1080p
 ```
 ### 📐 Resolution & Auto-Scaling
 You can easily control the output quality by using the `--res` flag, which provides convenient presets that automatically set the optimal width for higher quality/density output:
 - `--res 480p` (Maps to 854 columns)
 - `--res 720p` (Maps to 1280 columns)
 - `--res 1080p` (Maps to 1920 columns)
+- `--res 1440p` (Maps to 2560 columns)
 
 Alternatively, you can manually specify the width (`--cols`). ASCILINE will automatically calculate the correct `--rows` based on the source video's aspect ratio to prevent stretching.
 
