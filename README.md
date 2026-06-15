@@ -12,7 +12,7 @@
 
 1. **Pure Typographic Manipulation**: The visual stream is not a standard media file—it's raw HTML/Canvas text. This makes the impossible possible: you can apply real-time CSS filters (neon glows, text shadows, animations) to video content.
 2. **Local AI & LLM Ready**: By reducing complex pixel streams into structured logical strings, ASCILINE acts as a perfect bridge for AI. Instead of feeding heavy computer vision models, lightweight LLMs can process semantic video summaries.
-3. **Ultra-Low Bandwidth & IoT Compatibility (valid for ASCII MOD)**: Standard codecs (H.264/VP9) choke microcontrollers and weak networks. ASCILINE processes the heavy lifting once on the backend, streaming only a few kilobytes per frame.
+3. **Ultra-Low Bandwidth & Zero GPU (valid for ASCII MOD)**: Standard codecs (H.264/VP9) require dedicated hardware decoders, choking microcontrollers and weak devices. ASCILINE offloads the heavy lifting to the backend, streaming only lightweight text frames. By scaling down the output quality (using fewer columns), extremely low bandwidth requirements can be achieved. This means you can play fluid, real-time video on devices with constrained networks and zero GPU capabilities (smart appliances, retro terminals, basic microcontrollers).
 4. **Bypassing Browser Constraints**: Modern browsers aggressively throttle autoplay videos, and ad-blockers restrict traditional media frames. To the browser, ASCILINE is simply "JavaScript updating a canvas"—completely invisible to media restrictions.
 
 ## 🚀 Technical Features
@@ -199,9 +199,6 @@ Each entry can override the global `--mode`, `--pixel`, `--vol`, and `--cols` de
 ```
 Video paths are resolved automatically — the engine checks the project root and the `videos/` subfolder, so you can write just the filename.
 
-
-ASCILINE is distributed under the MIT License, but with a strict ethical guardrail.
-Because this engine bypasses standard browser constraints and ad-blockers (by rendering pure text instead of video), we strictly prohibit its use by ad-networks to serve unblockable advertisements. 
 
 ### 🟢 Live Interactive Showcase
 Experience the ASCILINE engine running live directly in your browser with multiple rendering modes. 👉 **[Try it out at asciline.dev](https://www.asciline.dev)**
