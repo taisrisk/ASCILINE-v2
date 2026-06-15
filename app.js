@@ -8,7 +8,7 @@
 
 const player    = document.getElementById('ascii-player');
 const canvas    = document.getElementById('ascii-canvas');
-const ctx       = canvas.getContext('2d');
+let ctx         = canvas.getContext('2d');
 const statusEl  = document.getElementById('status');
 const container = document.getElementById('player-container');
 const overlay   = document.getElementById('play-overlay');
@@ -19,7 +19,7 @@ const volumeSlider = document.getElementById('volume-slider');
 let state = 'IDLE'; // IDLE | PLAYING | PAUSED
 let ws = null;
 const frameBuffer = [];
-const BUFFER_SIZE = 4;
+const BUFFER_SIZE = 2; // Reduced buffer size for lower latency
 let codecDecoder = null; // Adaptive codec decoder (codec.js)
 let targetFps = 24;
 let frameInterval = 1000 / targetFps;
@@ -166,6 +166,16 @@ function connectWebSocket() {
                 renderMode = parseInt(p[2]);
                 pixelMode = (p.length > 5 && parseInt(p[5]) === 1);
                 const currentQueueIndex = (p.length > 6) ? parseInt(p[6]) : null;
+
+                if (renderMode === 6) {
+                    try {
+                        // Re-initialize context for HDR
+                        ctx = canvas.getContext('2d', { colorSpace: 'display-p3' });
+                    } catch (e) {
+                        console.warn('display-p3 not supported by browser, falling back to sRGB');
+                    }
+                }
+
                 buildCanvas(parseInt(p[3]), parseInt(p[4]));
 
                 // Initialize adaptive codec decoder (pixel=3 bytes, ASCII color=4 bytes)
@@ -239,7 +249,7 @@ function connectWebSocket() {
             }
         }
 
-        while (frameBuffer.length > BUFFER_SIZE * 5) frameBuffer.shift();
+        while (frameBuffer.length > BUFFER_SIZE * 3) frameBuffer.shift();
     };
 
     ws.onopen = () => { statusEl.textContent = 'Buffering...'; };
@@ -279,12 +289,13 @@ function renderFrame(now) {
     if (frameBuffer.length === 0) return;
 
     // A/V Sync: Drop frames that are too far behind the master clock (catch up)
-    while (frameBuffer.length > 1 && frameBuffer[0].time < masterClock - 0.1) {
+    // Made more aggressive for lower latency live playback
+    while (frameBuffer.length > 1 && frameBuffer[0].time < masterClock - 0.05) {
         frameBuffer.shift();
     }
 
     // A/V Sync: Wait if the frame is in the future
-    if (frameBuffer[0].time > masterClock + 0.05) {
+    if (frameBuffer[0].time > masterClock + 0.02) {
         return;
     }
 
@@ -296,7 +307,7 @@ function renderFrame(now) {
         currentFps = frameCount;
         frameCount = 0;
         lastFpsUpdate = now;
-        const modes = { 2: '512 Color', 3: '32K Color', 4: '262K Color', 5: '16M Ultra' };
+        const modes = { 2: '512 Color', 3: '32K Color', 4: '262K Color', 5: '16M Ultra', 6: '32M HDR' };
         const label = (modes[renderMode] || 'B&W') + (pixelMode ? ' PIXEL' : '');
         statusEl.textContent = `FPS: ${currentFps}/${Math.round(targetFps)} | Buf: ${frameBuffer.length} | ${label}`;
     }

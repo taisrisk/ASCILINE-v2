@@ -46,7 +46,8 @@ def get_cols_from_res(res: str) -> int | None:
     res_map = {
         "480p": 854,
         "720p": 1280,
-        "1080p": 1920
+        "1080p": 1920,
+        "1440p": 2560
     }
     return res_map.get(res.lower() if res else None)
 
@@ -356,15 +357,15 @@ async def websocket_endpoint(websocket: WebSocket):
 
             mapper       = AsciiMapper()
             source_fps   = decoder.fps
-            MAX_FPS      = 30
+            MAX_FPS      = getattr(app.state, "max_fps", 30)
             char_byte_lut= np.array([ord(c) for c in mapper._lut], dtype=np.uint8)
-            qb           = {5: 0, 4: 2, 3: 3, 2: 5}.get(render_mode, 0)
+            qb           = {6: 0, 5: 0, 4: 2, 3: 3, 2: 5}.get(render_mode, 0)
 
             # ── FPS DECIMATION ──
-            # If source > 30 FPS, skip every Nth frame using grab() (no decode).
-            # This halves CPU load for 60 FPS sources.
+            # If source > MAX_FPS, skip every Nth frame using grab() (no decode).
+            # This halves CPU load for high FPS sources.
             if source_fps > MAX_FPS:
-                skip_n = round(source_fps / MAX_FPS)  # e.g. 60/30 = 2
+                skip_n = round(source_fps / MAX_FPS)
                 effective_fps = source_fps / skip_n
             else:
                 skip_n = 1
@@ -475,6 +476,9 @@ async def websocket_endpoint(websocket: WebSocket):
                     wait = (frame_index * frame_t) - elapsed
                     if wait > 0:
                         await asyncio.sleep(wait)
+                    else:
+                        # Yield control to prevent event loop blocking on high-FPS or fast encodes
+                        await asyncio.sleep(0)
                     
                     frame_index += 1
 
@@ -527,7 +531,7 @@ HELP_TEXT = "\033[1;37m" + """
 ║  \033[32m--pixel\033[1;37m        Pixel block mode (with mode 2-5) ║
 ║  \033[32m--cols\033[1;37m  \033[35mN\033[1;37m      Grid columns  (default: 200)     ║
 ║  \033[32m--rows\033[1;37m  \033[35mN\033[1;37m      Grid rows     (default: auto)    ║
-║  \033[32m--res\033[1;37m   \033[35mR\033[1;37m      Resolution preset (480p, 720p, 1080p)║
+║  \033[32m--res\033[1;37m   \033[35mR\033[1;37m      Resolution preset (480p, 720p, 1080p, 1440p)║
 ║                                                   ║
 ║  \033[33m─── Playback ───\033[1;37m                                ║
 ║  \033[32m--vol\033[1;37m   \033[35m0-5\033[1;37m    Volume (0=mute, 1=normal, 5=2x)  ║
@@ -626,17 +630,17 @@ if __name__ == "__main__":
     render = parser.add_argument_group('\033[33mRender\033[0m')
     render.add_argument(
         "--mode",
-        type=int, choices=[1, 2, 3, 4, 5], default=1,
-        help="Color quality: 1=B&W  2=512c  3=32Kc  4=262Kc  5=16M Ultra"
+        type=int, choices=[1, 2, 3, 4, 5, 6], default=1,
+        help="Color quality: 1=B&W  2=512c  3=32Kc  4=262Kc  5=16M Ultra  6=32M HDR"
     )
     render.add_argument(
         "--pixel",
         action="store_true", default=False,
-        help="Pixel mode: replaces ASCII characters with colored blocks (combine with --mode 2-5)"
+        help="Pixel mode: replaces ASCII characters with colored blocks (combine with --mode 2-6)"
     )
     render.add_argument("--cols", type=int, default=None, help="Grid columns (default: 200 for text, 450 for pixel)")
     render.add_argument("--rows", type=int, default=0,   help="Grid rows    (default: auto from video aspect ratio)")
-    render.add_argument("--res", type=str, choices=["480p", "720p", "1080p"], default=None, help="Resolution preset (overrides --cols)")
+    render.add_argument("--res", type=str, choices=["480p", "720p", "1080p", "1440p"], default=None, help="Resolution preset (overrides --cols)")
 
     # ── Playback ──
     playback = parser.add_argument_group('\033[33mPlayback\033[0m')
@@ -652,6 +656,7 @@ if __name__ == "__main__":
         help="Adaptive-codec colour fidelity (lossless = bit-exact; lower = "
              "smaller stream via lossy temporal delta). Chars always exact."
     )
+    playback.add_argument("--max-fps", type=int, default=30, help="Max FPS cap (e.g. 30, 60, 120)")
 
     # ── Server ──
     srv = parser.add_argument_group('\033[33mServer\033[0m')
@@ -661,9 +666,9 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Validate: --pixel requires color mode (2-5)
+    # Validate: --pixel requires color mode (2-6)
     if args.pixel and args.mode == 1:
-        print("[ERROR] --pixel requires a color mode (--mode 2-5). B&W mode is text-only.")
+        print("[ERROR] --pixel requires a color mode (--mode 2-6). B&W mode is text-only.")
         exit(1)
 
     # Build the queue
@@ -679,6 +684,7 @@ if __name__ == "__main__":
     app.state.loop          = args.loop
     app.state.tolerance     = {"lossless": 0, "high": 4, "balanced": 8, "low": 16}[args.quality]
     app.state.debug         = args.debug
+    app.state.max_fps       = args.max_fps
 
     res_cols = get_cols_from_res(args.res)
     if res_cols is not None:
@@ -695,7 +701,7 @@ if __name__ == "__main__":
         cap = cv2.VideoCapture(entry['video'])
         if cap.isOpened():
             fps = cap.get(cv2.CAP_PROP_FPS)
-            if fps > 35:  # Consider > 35 as high FPS
+            if fps > args.max_fps + 5:
                 high_fps_videos.append((entry['video'], fps))
         cap.release()
 
@@ -703,18 +709,8 @@ if __name__ == "__main__":
         print("\n\033[1;33m[WARNING] High FPS Source(s) Detected:\033[0m")
         for vid, fps in high_fps_videos:
             print(f"  - \033[36m{vid}\033[0m is \033[1;31m{fps:.1f} FPS\033[0m")
-        print("\033[33mASCILINE is optimized for 24-30 FPS cinematic playback.")
-        print("High FPS videos will automatically be decimated to ~30 FPS,")
-        print("but performance may still drop depending on the system's CPU.")
-        print("For optimal performance, we recommend using 30 FPS source videos.\033[0m\n")
-        
-        while True:
-            choice = input("\033[1mDo you want to continue anyway? (y/n): \033[0m").strip().lower()
-            if choice == 'y':
-                break
-            elif choice == 'n':
-                print("Exiting...")
-                exit(0)
+        print(f"\033[33mASCILINE is set to max {args.max_fps} FPS.")
+        print(f"High FPS videos will automatically be decimated to ~{args.max_fps} FPS.\033[0m\n")
 
     # ── Startup Banner ──
     print(ASCII_LOGO)
