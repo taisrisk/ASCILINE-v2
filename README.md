@@ -210,25 +210,16 @@ Each entry can override the global `--mode`, `--pixel`, `--vol`, `--cols`, and `
 ```
 Video paths are resolved automatically — the engine checks the project root and the `videos/` subfolder, so you can write just the filename.
 
+## 🙏 Support the Original Creator
 
-### 🟢 Live Interactive Showcase
-Experience the ASCILINE engine running live directly in your browser with multiple rendering modes. 👉 **[Try it out at asciline.dev](https://www.asciline.dev)**
+As mentioned, this is an upgraded fork designed for modern, high-performance web applications (HDR, 1440p, 120 FPS, low latency).
 
+All credit for the core engine architecture and adaptive streaming codec goes to the original creator. If you find this project helpful, please support the original author by visiting their repository, starring their project, and supporting them directly:
 
-## 📈 Star History
-[![Star History Chart](https://api.star-history.com/svg?repos=YusufB5/ASCILINE&type=Date)](https://star-history.com/#YusufB5/ASCILINE&Date)
-
-### ☕ Support the Project ❤️ 
-If you find this project helpful, you can support me by donating crypto:
-* **Solana (SOL / USDC):** `H1wSQAhjgsu7AxenF4e5ZBYiBjkhDLVzkKaZuVPcrE14`
-* **Ethereum (ETH / USDT):** `0x85B2f970045c0F7c282089Ab6CF897C20230e086`
-* **Bitcoin (BTC):** `bc1qvtcl55v54gkzwnp2zxn70usea3gf5ncncqa0fv`
+👉 **[Original ASCILINE Repository (YusufB5)](https://github.com/YusufB5/ASCILINE)**
 
 ## 📜 License & Ethical Guardrails
 
 ASCILINE is distributed under the MIT License, but with an anti ad strict ethical guardrail. 
 
 See the [LICENSE](LICENSE) file for the full text, which includes the **ANTI-ADVERTISEMENT RESTRICTION** clause.
-
-## 📬 Contact & Questions
-[asciline.engine@gmail.com](mailto:asciline.engine@gmail.com)
