@@ -8,7 +8,7 @@
 
 const player    = document.getElementById('ascii-player');
 const canvas    = document.getElementById('ascii-canvas');
-let ctx         = canvas.getContext('2d');
+const ctx       = canvas.getContext('2d');
 const statusEl  = document.getElementById('status');
 const container = document.getElementById('player-container');
 const overlay   = document.getElementById('play-overlay');
@@ -19,8 +19,7 @@ const volumeSlider = document.getElementById('volume-slider');
 let state = 'IDLE'; // IDLE | PLAYING | PAUSED
 let ws = null;
 const frameBuffer = [];
-const TARGET_PRE_RENDER_SECONDS = 5; // 5 seconds of pre-rendering
-let PRE_RENDER_BUFFER_SIZE = 150;    // calculated as targetFps * 5
+const BUFFER_SIZE = 4;
 let codecDecoder = null; // Adaptive codec decoder (codec.js)
 let targetFps = 24;
 let frameInterval = 1000 / targetFps;
@@ -167,16 +166,6 @@ function connectWebSocket() {
                 renderMode = parseInt(p[2]);
                 pixelMode = (p.length > 5 && parseInt(p[5]) === 1);
                 const currentQueueIndex = (p.length > 6) ? parseInt(p[6]) : null;
-
-                if (renderMode === 6) {
-                    try {
-                        // Re-initialize context for HDR
-                        ctx = canvas.getContext('2d', { colorSpace: 'display-p3' });
-                    } catch (e) {
-                        console.warn('display-p3 not supported by browser, falling back to sRGB');
-                    }
-                }
-
                 buildCanvas(parseInt(p[3]), parseInt(p[4]));
 
                 // Initialize adaptive codec decoder (pixel=3 bytes, ASCII color=4 bytes)
@@ -186,25 +175,19 @@ function connectWebSocket() {
                     codecDecoder = null;
                 }
 
-                PRE_RENDER_BUFFER_SIZE = Math.ceil(targetFps * TARGET_PRE_RENDER_SECONDS);
-
-                // ── PRE-RENDER / AUDIO READY GATE ──
-                // Buffer video frames for TARGET_PRE_RENDER_SECONDS before rendering
-                // to guarantee smooth streaming.
+                // ── AUDIO READY GATE ──
+                // Buffer video frames but don't render until audio is ready.
+                // This prevents the 0.5s initial stutter.
                 readyToRender = false;
-                state = 'BUFFERING';
-                statusEl.textContent = `Pre-rendering... 0%`;
+                state = 'PLAYING';
 
                 const beginRendering = () => {
-                    state = 'PLAYING';
                     readyToRender = true;
-                    streamStartTime = performance.now() - (frameBuffer[0]?.time * 1000 || 0); // sync start to first buffered frame
+                    streamStartTime = performance.now();
                     lastRenderTime = performance.now();
                     lastFpsUpdate = lastRenderTime;
                     requestAnimationFrame(renderFrame);
                 };
-
-                let audioReady = false;
 
                 if (audioEl) {
                     audioEl.pause();
@@ -212,48 +195,22 @@ function connectWebSocket() {
                     audioEl.src = `/audio${qs}t=${Date.now()}`;
                     audioEl.volume = volumeSlider ? volumeSlider.value : 1.0;
                     audioEl.load();
+                    audioEl.play().catch(() => {});
 
-                    const tryStart = () => {
-                        if (audioReady && frameBuffer.length >= PRE_RENDER_BUFFER_SIZE && state === 'BUFFERING') {
-                            audioEl.play().catch(() => {});
-                            beginRendering();
-                        }
-                    };
-
+                    // Wait for audio to actually start playing
                     if (audioEl.readyState >= 3) {
-                        audioReady = true;
-                        tryStart();
+                        beginRendering();
                     } else {
-                        audioEl.addEventListener('canplay', () => {
-                            audioReady = true;
-                            tryStart();
-                        }, { once: true });
-
-                        // Fallback: if audio fails to load (vol=0 / 204), mark as ready after 500ms
+                        audioEl.addEventListener('playing', beginRendering, { once: true });
+                        // Fallback: if audio fails to load (vol=0 / 204), start after 500ms
                         setTimeout(() => {
-                            audioReady = true;
-                            tryStart();
+                            if (!readyToRender) beginRendering();
                         }, 500);
                     }
                 } else {
-                    audioReady = true;
+                    // No audio element at all → start immediately
+                    beginRendering();
                 }
-
-                // Interval to check if pre-rendering is complete
-                const bufferCheckInterval = setInterval(() => {
-                    if (state !== 'BUFFERING') {
-                        clearInterval(bufferCheckInterval);
-                        return;
-                    }
-                    const percent = Math.min(100, Math.round((frameBuffer.length / PRE_RENDER_BUFFER_SIZE) * 100));
-                    statusEl.textContent = `Pre-rendering... ${percent}%`;
-
-                    if (audioReady && frameBuffer.length >= PRE_RENDER_BUFFER_SIZE) {
-                        clearInterval(bufferCheckInterval);
-                        beginRendering();
-                    }
-                }, 50);
-
                 return;
             }
             
@@ -282,11 +239,10 @@ function connectWebSocket() {
             }
         }
 
-        // Cap max buffer to 2x our pre-render requirement to prevent memory leaks
-        while (frameBuffer.length > PRE_RENDER_BUFFER_SIZE * 2) frameBuffer.shift();
+        while (frameBuffer.length > BUFFER_SIZE * 5) frameBuffer.shift();
     };
 
-    ws.onopen = () => { statusEl.textContent = 'Connecting...'; };
+    ws.onopen = () => { statusEl.textContent = 'Buffering...'; };
 
     ws.onclose = () => {
         if (state === 'PLAYING' || state === 'PAUSED') {
@@ -340,7 +296,7 @@ function renderFrame(now) {
         currentFps = frameCount;
         frameCount = 0;
         lastFpsUpdate = now;
-        const modes = { 2: '512 Color', 3: '32K Color', 4: '262K Color', 5: '16M Ultra', 6: '32M HDR' };
+        const modes = { 2: '512 Color', 3: '32K Color', 4: '262K Color', 5: '16M Ultra' };
         const label = (modes[renderMode] || 'B&W') + (pixelMode ? ' PIXEL' : '');
         statusEl.textContent = `FPS: ${currentFps}/${Math.round(targetFps)} | Buf: ${frameBuffer.length} | ${label}`;
     }
