@@ -35,12 +35,16 @@ class VideoDecoder:
     """
 
     def __init__(self, path: str, cols: int, rows: int, skip_gray: bool = False) -> None:
-        self._cap = cv2.VideoCapture(path)
+        # Try to initialize with GPU hardware acceleration if available
+        self._cap = cv2.VideoCapture(path, cv2.CAP_ANY, [cv2.CAP_PROP_HW_ACCELERATION, cv2.VIDEO_ACCELERATION_ANY])
+
+        # If HW acceleration is not supported, it quietly falls back to CPU
+        if not self._cap.isOpened():
+            self._cap = cv2.VideoCapture(path)
 
         # Optimize latency for live streams (HTTP/RTMP/RTSP) by reducing the buffer
         if path.startswith(("http://", "https://", "rtmp://", "rtsp://", "udp://")):
             self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-
         if not self._cap.isOpened():
             raise FileNotFoundError(f"Could not open video file: {path!r}")
 

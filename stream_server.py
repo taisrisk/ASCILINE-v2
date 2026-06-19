@@ -15,8 +15,6 @@ import subprocess
 import json
 import numpy as np
 import cv2
-import queue
-import threading
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -34,7 +32,10 @@ app = FastAPI()
 
 def get_video_dimensions(path: str) -> tuple[int, int]:
     """Quickly probe a video file to get (width, height) without decoding frames."""
-    cap = cv2.VideoCapture(path)
+    # Try GPU HW accel first
+    cap = cv2.VideoCapture(path, cv2.CAP_ANY, [cv2.CAP_PROP_HW_ACCELERATION, cv2.VIDEO_ACCELERATION_ANY])
+    if not cap.isOpened():
+        cap = cv2.VideoCapture(path)
     if not cap.isOpened():
         raise FileNotFoundError(f"Could not open video file: {path!r}")
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -359,15 +360,15 @@ async def websocket_endpoint(websocket: WebSocket):
 
             mapper       = AsciiMapper()
             source_fps   = decoder.fps
-            MAX_FPS      = getattr(app.state, "max_fps", 30)
+            MAX_FPS      = 30
             char_byte_lut= np.array([ord(c) for c in mapper._lut], dtype=np.uint8)
-            qb           = {6: 0, 5: 0, 4: 2, 3: 3, 2: 5}.get(render_mode, 0)
+            qb           = {5: 0, 4: 2, 3: 3, 2: 5}.get(render_mode, 0)
 
             # ── FPS DECIMATION ──
-            # If source > MAX_FPS, skip every Nth frame using grab() (no decode).
-            # This halves CPU load for high FPS sources.
+            # If source > 30 FPS, skip every Nth frame using grab() (no decode).
+            # This halves CPU load for 60 FPS sources.
             if source_fps > MAX_FPS:
-                skip_n = round(source_fps / MAX_FPS)
+                skip_n = round(source_fps / MAX_FPS)  # e.g. 60/30 = 2
                 effective_fps = source_fps / skip_n
             else:
                 skip_n = 1
@@ -388,111 +389,81 @@ async def websocket_endpoint(websocket: WebSocket):
             bw_raw_bytes = 0
             debug_mode = getattr(app.state, "debug", False)
             frame_index = 0
+            prev_frame = None  # previous framebuffer snapshot for delta coding
 
-            # ── ASYNC PRE-ENCODING BUFFER THREAD ──
-            # We encode frames ahead of time into a thread-safe queue.
-            # This allows the Python event loop to stream asynchronously without being blocked by OpenCV.
-            # We buffer up to 150 frames.
-            frame_queue = queue.Queue(maxsize=150)
-            encode_thread_active = True
+            # Pre-allocate send buffer WITH header space to avoid per-frame concat
+            if pixel_mode:
+                # Zero-Copy Pixel: 4-byte header + raw BGR (3 bytes per pixel)
+                pixel_send_buf = bytearray(4 + rows * cols * 3)
+            elif render_mode > 1:
+                # ASCII Color: 4-byte header + [char,R,G,B] per pixel
+                ascii_send_buf = bytearray(4 + rows * cols * 4)
 
-            def encode_loop():
-                nonlocal decoder
-                prev_frame = None  # previous framebuffer snapshot for delta coding
-
-                # Pre-allocate send buffer WITH header space to avoid per-frame concat
-                if pixel_mode:
-                    # Zero-Copy Pixel: 4-byte header + raw BGR (3 bytes per pixel)
-                    pixel_send_buf = bytearray(4 + rows * cols * 3)
-                elif render_mode > 1:
-                    # ASCII Color: 4-byte header + [char,R,G,B] per pixel
-                    ascii_send_buf = bytearray(4 + rows * cols * 4)
-
-                enc_frame_index = 0
-                try:
-                    while encode_thread_active:
-                        # ── FPS DECIMATION via grab() ──
-                        # For 60→30 fps: grab (skip) 1 frame, then decode 1 frame.
-                        # grab() is ~10x faster than read() because it skips decoding.
-                        for _ in range(skip_n - 1):
-                            if not decoder.grab():
-                                break  # EOF reached during skip
-
-                        try:
-                            gray_frame, bgr_frame = next(decoder)
-                        except StopIteration:
-                            frame_queue.put((None, None, None)) # EOF marker
-                            break
-
-                        if pixel_mode:
-                            # ── PIXEL MODE: raw BGR (3 bytes/cell) ──
-                            raw_size = 4 + rows * cols * 3
-                            if adaptive:
-                                msg, prev_frame = encode_frame(
-                                    np.ascontiguousarray(bgr_frame),
-                                    prev_frame, enc_frame_index, tolerance=tolerance)
-                                frame_queue.put((msg, raw_size, True)) # (data, raw_size, is_binary)
-                            else:
-                                # ── ZERO-COPY PIXEL MODE (legacy) ──
-                                struct.pack_into(">I", pixel_send_buf, 0, enc_frame_index)
-                                pixel_send_buf[4:] = bgr_frame.tobytes()
-                                frame_queue.put((bytes(pixel_send_buf), raw_size, True))
-                        else:
-                            indices = np.floor_divide(gray_frame, max(1, 256 // mapper._n))
-                            np.clip(indices, 0, mapper._n - 1, out=indices)
-
-                            if render_mode == 1:
-                                char_matrix = mapper._lut[indices]
-                                lines = [''.join(row) for row in char_matrix]
-                                payload = f"{enc_frame_index}\n" + '\n'.join(lines)
-                                payload_size = len(payload.encode('utf-8'))
-                                frame_queue.put((payload, payload_size, False))
-                            else:
-                                char_codes = char_byte_lut[indices]
-                                rgb = bgr_frame[:, :, ::-1]
-                                if qb > 0:
-                                    rgb = (rgb >> qb) << qb
-                                frame_buf[:, :, 0] = char_codes
-                                frame_buf[:, :, 1:] = rgb
-                                raw_size = 4 + rows * cols * 4
-                                if adaptive:
-                                    msg, prev_frame = encode_frame(
-                                        frame_buf, prev_frame, enc_frame_index,
-                                        tolerance=tolerance)
-                                    frame_queue.put((msg, raw_size, True))
-                                else:
-                                    struct.pack_into(">I", ascii_send_buf, 0, enc_frame_index)
-                                    ascii_send_buf[4:] = frame_buf.tobytes()
-                                    frame_queue.put((bytes(ascii_send_buf), raw_size, True))
-
-                        enc_frame_index += 1
-                except Exception as e:
-                    print(f"Encode thread error: {e}")
-                    frame_queue.put((None, None, None))
-
-            encoder_thread = threading.Thread(target=encode_loop, daemon=True)
-            encoder_thread.start()
-
+            raw_frame_num = 0
             try:
                 while True:
-                    # Non-blocking get to yield back to event loop if queue is empty
+                    # ── FPS DECIMATION via grab() ──
+                    # For 60→30 fps: grab (skip) 1 frame, then decode 1 frame.
+                    # grab() is ~10x faster than read() because it skips decoding.
+                    for _ in range(skip_n - 1):
+                        if not decoder.grab():
+                            break  # EOF reached during skip
+
                     try:
-                        data, raw_size, is_binary = frame_queue.get_nowait()
-                    except queue.Empty:
-                        await asyncio.sleep(0.001)
-                        continue
+                        gray_frame, bgr_frame = next(decoder)
+                    except StopIteration:
+                        break
 
-                    if data is None:
-                        break # EOF marker
-
-                    if is_binary:
-                        await websocket.send_bytes(data)
-                        bw_bytes_sent += len(data)
-                        bw_raw_bytes += raw_size
+                    if pixel_mode:
+                        # ── PIXEL MODE: raw BGR (3 bytes/cell) ──
+                        raw_size = 4 + rows * cols * 3
+                        if adaptive:
+                            msg, prev_frame = encode_frame(
+                                np.ascontiguousarray(bgr_frame),
+                                prev_frame, frame_index, tolerance=tolerance)
+                            await websocket.send_bytes(msg)
+                            bw_bytes_sent += len(msg)
+                            bw_raw_bytes += raw_size
+                        else:
+                            # ── ZERO-COPY PIXEL MODE (legacy) ──
+                            struct.pack_into(">I", pixel_send_buf, 0, frame_index)
+                            pixel_send_buf[4:] = bgr_frame.tobytes()
+                            await websocket.send_bytes(bytes(pixel_send_buf))
+                            bw_bytes_sent += len(pixel_send_buf)
+                            bw_raw_bytes += len(pixel_send_buf)
                     else:
-                        await websocket.send_text(data)
-                        bw_bytes_sent += len(data.encode('utf-8'))
-                        bw_raw_bytes += raw_size
+                        indices = np.floor_divide(gray_frame, max(1, 256 // mapper._n))
+                        np.clip(indices, 0, mapper._n - 1, out=indices)
+
+                        if render_mode == 1:
+                            char_matrix = mapper._lut[indices]
+                            lines = [''.join(row) for row in char_matrix]
+                            payload = f"{frame_index}\n" + '\n'.join(lines)
+                            await websocket.send_text(payload)
+                            payload_size = len(payload.encode('utf-8'))
+                            bw_bytes_sent += payload_size
+                            bw_raw_bytes += payload_size
+                        else:
+                            char_codes = char_byte_lut[indices]
+                            rgb = bgr_frame[:, :, ::-1]
+                            if qb > 0:
+                                rgb = (rgb >> qb) << qb
+                            frame_buf[:, :, 0] = char_codes
+                            frame_buf[:, :, 1:] = rgb
+                            raw_size = 4 + rows * cols * 4
+                            if adaptive:
+                                msg, prev_frame = encode_frame(
+                                    frame_buf, prev_frame, frame_index,
+                                    tolerance=tolerance)
+                                await websocket.send_bytes(msg)
+                                bw_bytes_sent += len(msg)
+                                bw_raw_bytes += raw_size
+                            else:
+                                struct.pack_into(">I", ascii_send_buf, 0, frame_index)
+                                ascii_send_buf[4:] = frame_buf.tobytes()
+                                await websocket.send_bytes(bytes(ascii_send_buf))
+                                bw_bytes_sent += len(ascii_send_buf)
+                                bw_raw_bytes += len(ascii_send_buf)
 
                     current_time = time.time()
                     if debug_mode and current_time - bw_start_time >= 1.0:
@@ -515,7 +486,6 @@ async def websocket_endpoint(websocket: WebSocket):
                     frame_index += 1
 
             finally:
-                encode_thread_active = False
                 decoder.release()
 
             # Video finished → advance queue
@@ -663,13 +633,13 @@ if __name__ == "__main__":
     render = parser.add_argument_group('\033[33mRender\033[0m')
     render.add_argument(
         "--mode",
-        type=int, choices=[1, 2, 3, 4, 5, 6], default=1,
-        help="Color quality: 1=B&W  2=512c  3=32Kc  4=262Kc  5=16M Ultra  6=32M HDR"
+        type=int, choices=[1, 2, 3, 4, 5], default=1,
+        help="Color quality: 1=B&W  2=512c  3=32Kc  4=262Kc  5=16M Ultra"
     )
     render.add_argument(
         "--pixel",
         action="store_true", default=False,
-        help="Pixel mode: replaces ASCII characters with colored blocks (combine with --mode 2-6)"
+        help="Pixel mode: replaces ASCII characters with colored blocks (combine with --mode 2-5)"
     )
     render.add_argument("--cols", type=int, default=None, help="Grid columns (default: 200 for text, 450 for pixel)")
     render.add_argument("--rows", type=int, default=0,   help="Grid rows    (default: auto from video aspect ratio)")
@@ -689,7 +659,6 @@ if __name__ == "__main__":
         help="Adaptive-codec colour fidelity (lossless = bit-exact; lower = "
              "smaller stream via lossy temporal delta). Chars always exact."
     )
-    playback.add_argument("--max-fps", type=int, default=30, help="Max FPS cap (e.g. 30, 60, 120)")
 
     # ── Server ──
     srv = parser.add_argument_group('\033[33mServer\033[0m')
@@ -699,9 +668,9 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Validate: --pixel requires color mode (2-6)
+    # Validate: --pixel requires color mode (2-5)
     if args.pixel and args.mode == 1:
-        print("[ERROR] --pixel requires a color mode (--mode 2-6). B&W mode is text-only.")
+        print("[ERROR] --pixel requires a color mode (--mode 2-5). B&W mode is text-only.")
         exit(1)
 
     # Build the queue
@@ -717,7 +686,6 @@ if __name__ == "__main__":
     app.state.loop          = args.loop
     app.state.tolerance     = {"lossless": 0, "high": 4, "balanced": 8, "low": 16}[args.quality]
     app.state.debug         = args.debug
-    app.state.max_fps       = args.max_fps
 
     res_cols = get_cols_from_res(args.res)
     if res_cols is not None:
@@ -731,10 +699,13 @@ if __name__ == "__main__":
     # ── High FPS Warning ──
     high_fps_videos = []
     for entry in queue:
-        cap = cv2.VideoCapture(entry['video'])
+        # Try GPU HW accel first
+        cap = cv2.VideoCapture(entry['video'], cv2.CAP_ANY, [cv2.CAP_PROP_HW_ACCELERATION, cv2.VIDEO_ACCELERATION_ANY])
+        if not cap.isOpened():
+            cap = cv2.VideoCapture(entry['video'])
         if cap.isOpened():
             fps = cap.get(cv2.CAP_PROP_FPS)
-            if fps > args.max_fps + 5:
+            if fps > 35:  # Consider > 35 as high FPS
                 high_fps_videos.append((entry['video'], fps))
         cap.release()
 
@@ -742,8 +713,18 @@ if __name__ == "__main__":
         print("\n\033[1;33m[WARNING] High FPS Source(s) Detected:\033[0m")
         for vid, fps in high_fps_videos:
             print(f"  - \033[36m{vid}\033[0m is \033[1;31m{fps:.1f} FPS\033[0m")
-        print(f"\033[33mASCILINE is set to max {args.max_fps} FPS.")
-        print(f"High FPS videos will automatically be decimated to ~{args.max_fps} FPS.\033[0m\n")
+        print("\033[33mASCILINE is optimized for 24-30 FPS cinematic playback.")
+        print("High FPS videos will automatically be decimated to ~30 FPS,")
+        print("but performance may still drop depending on the system's CPU.")
+        print("For optimal performance, we recommend using 30 FPS source videos.\033[0m\n")
+
+        while True:
+            choice = input("\033[1mDo you want to continue anyway? (y/n): \033[0m").strip().lower()
+            if choice == 'y':
+                break
+            elif choice == 'n':
+                print("Exiting...")
+                exit(0)
 
     # ── Startup Banner ──
     print(ASCII_LOGO)

@@ -1,6 +1,6 @@
 # 🌌 ASCILINE Engine (Upgraded Fork)
 
-> **Note:** This is an upgraded fork of the original ASCILINE project, adding high FPS support (60/120fps), low-latency live streaming, 1440p resolution presets, and an experimental 32M Ultra HDR rendering mode. If you love the core engine, please support the [original creator](https://github.com/YusufB5/ASCILINE).
+
 
 **ASCILINE** is a high-performance, cross-platform real-time ASCII video rendering engine. **Our core objective is to transform the web into a highly dynamic and interactive typographic canvas.** By mapping pixels to text-based representations, we unlock new possibilities for web media delivery.
 
@@ -26,8 +26,8 @@
 -   **Master Clock Sync**: The audio track acts as the absolute master clock, guaranteeing perfect A/V synchronization.
 -   **Low-Overhead Binary Protocol*: Frames are streamed as raw binary (`Uint8Array`) directly to the canvas, saving bandwidth and CPU.
 -   **Multiple Color Modes**: Supports everything from classic B&W to 16M color ultra-fidelity.
--   **Flexible Video Management**: Supports JSON playlists (per-video mode & volume), 
-      folder-based auto-queuing (filesystem order), single-file mode, and infinite loop 
+-   **Flexible Video Management**: Supports JSON playlists (per-video mode & volume),
+      folder-based auto-queuing (filesystem order), single-file mode, and infinite loop
       playback — all controlled via CLI arguments.
 
 ## 🛠️ Architecture
@@ -210,16 +210,16 @@ Each entry can override the global `--mode`, `--pixel`, `--vol`, `--cols`, and `
 ```
 Video paths are resolved automatically — the engine checks the project root and the `videos/` subfolder, so you can write just the filename.
 
-## 🙏 Support the Original Creator
 
-As mentioned, this is an upgraded fork designed for modern, high-performance web applications (HDR, 1440p, 120 FPS, low latency).
 
-All credit for the core engine architecture and adaptive streaming codec goes to the original creator. If you find this project helpful, please support the original author by visiting their repository, starring their project, and supporting them directly:
 
-👉 **[Original ASCILINE Repository (YusufB5)](https://github.com/YusufB5/ASCILINE)**
+
+
+
+
 
 ## 📜 License & Ethical Guardrails
 
-ASCILINE is distributed under the MIT License, but with an anti ad strict ethical guardrail. 
+ASCILINE is distributed under the MIT License, but with an anti ad strict ethical guardrail.
 
 See the [LICENSE](LICENSE) file for the full text, which includes the **ANTI-ADVERTISEMENT RESTRICTION** clause.
